@@ -1,0 +1,88 @@
+#!/usr/bin/env python3
+
+import argparse
+import re
+import socket
+import ssl
+import html.parser
+
+DEFAULT_SERVER = "proj5.3700.network"
+DEFAULT_PORT = 443
+
+# ./3700crawler chen.anth 002180378
+# ./3700crawler -s x -p x chen.anth 002180378
+class Crawler:
+    def __init__(self, args):
+        self.server = args.server
+        self.port = args.port
+        self.username = args.username
+        self.password = args.password
+        self.notVisited = []
+        self.visited = set()
+        self.secret_flags = []
+
+    def run(self):
+        request = f"GET /accounts/login/ HTTP/1.1\nHost: {self.server}\nConnection: keep-alive\r\n\r\n"
+
+        print("Request to %s:%d" % (self.server, self.port))
+        print(request)
+        mysocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        mysocket.connect((self.server, self.port))
+        mysocket = ssl.create_default_context().wrap_socket(mysocket, server_hostname=self.server)
+        mysocket.send(request.encode('ascii'))
+
+        data = mysocket.recv(1000).decode('ascii')
+        print("Response:\n%s" % data)
+
+        # Find and get the CSRF token
+        csrfPos = data.find('csrfmiddlewaretoken')
+        csrfVal = data.find('value', csrfPos + 1)
+        csrf = data[csrfVal + 7 : csrfVal + 39]
+
+        login_request = f"POST /accounts/login/ HTTP/1.1\nHost: {self.server}\nConnection: keep-alive\nContent-Length: 109\nCookie: csrftoken={csrf};\r\n\r\nusername={self.username}&password={self.password}&csrfmiddlewaretoken={csrf}&next=%2Ffakebook%2F\r\n"
+        mysocket.send(login_request.encode('ascii'))
+        data = mysocket.recv(1000).decode('ascii')
+        # Find and get session ID
+        SessionPos = data.find("sessionid=")
+        sessionID = data[SessionPos+10:SessionPos+42]
+
+        self.notVisited.append(f"https://{self.server}/fakebook/")
+
+        while len(self.secret_flags) < 6 and self.notVisited:
+            page = self.notVisited.pop()
+            if page not in self.visited:
+                nextPage = f"GET {page} HTTP/1.1\nConnection: keep-alive\nHost:{self.server}\nCookie: csrftoken={csrf};sessionid={sessionID};\r\n\r\n"
+                mysocket.send(nextPage.encode('ascii'))
+                data = mysocket.recv(1000)
+                status = re.findall(r"\D(\d{3})\D", data.decode('ascii'))
+
+                if status[0] == '200':
+                    #TODO
+                    x
+                elif status[0] == '302':
+                    #TODO
+                    x
+                elif status[0] == '403':
+                    #TODO
+                    x
+                elif status[0] == '404':
+                    #TODO
+                    x
+                elif status[0] == '503':
+                    #TODO
+                    x
+                	
+        if len(self.secret_flags) == 5:
+            for flag in self.secret_flags:
+                print(flag)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='crawl Fakebook')
+    parser.add_argument('-s', dest="server", type=str, default=DEFAULT_SERVER, help="The server to crawl")
+    parser.add_argument('-p', dest="port", type=int, default=DEFAULT_PORT, help="The port to use")
+    parser.add_argument('username', type=str, help="The username to use")
+    parser.add_argument('password', type=str, help="The password to use")
+    args = parser.parse_args()
+    sender = Crawler(args)
+    sender.run()
