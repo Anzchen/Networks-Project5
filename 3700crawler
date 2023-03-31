@@ -4,13 +4,24 @@ import argparse
 import re
 import socket
 import ssl
-import html.parser
+from html.parser import HTMLParser
 
 DEFAULT_SERVER = "proj5.3700.network"
 DEFAULT_PORT = 443
 
-# ./3700crawler chen.anth 002180378
-# ./3700crawler -s x -p x chen.anth 002180378
+
+class LinkParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.links = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag == 'a':
+            for attr in attrs:
+                if attr[0] == 'href':
+                    self.links.append(attr[1])
+
+
 class Crawler:
     def __init__(self, args):
         self.server = args.server
@@ -21,60 +32,106 @@ class Crawler:
         self.visited = set()
         self.secret_flags = []
 
-    def run(self):
-        request = f"GET /accounts/login/ HTTP/1.1\nHost: {self.server}\nConnection: keep-alive\r\n\r\n"
+    def process_chunked_data(self, data):
+        decoded_data = ""
+        while data:
+            chunk_size_end = data.find('\r\n')
+            chunk_size = int(data[:chunk_size_end], 16)
+            if chunk_size == 0:
+                break
+            chunk_data_start = chunk_size_end + 2
+            chunk_data_end = chunk_data_start + chunk_size
+            decoded_data += data[chunk_data_start:chunk_data_end]
+            data = data[chunk_data_end + 2:]
+        return decoded_data
 
-        print("Request to %s:%d" % (self.server, self.port))
-        print(request)
+    def create_socket(self):
         mysocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         mysocket.connect((self.server, self.port))
-        mysocket = ssl.create_default_context().wrap_socket(mysocket, server_hostname=self.server)
-        mysocket.send(request.encode('ascii'))
+        ssl_context = ssl.create_default_context()
+        ssl_context.check_hostname = False
+        ssl_context.verify_mode = ssl.CERT_NONE
+        mysocket = ssl_context.wrap_socket(mysocket, server_hostname=self.server)
+        return mysocket
 
-        data = mysocket.recv(1000).decode('ascii')
-        print("Response:\n%s" % data)
+    def send_request(self, request, mysocket):
+        mysocket.send(request.encode('ascii'))
+        data = b""
+        while True:
+            recv_data = mysocket.recv(1000)
+            if not recv_data:
+                break
+            data += recv_data
+            if b'</html>' in recv_data:
+                break
+        return data.decode('ascii')
+
+    def run(self):
+        request = f"GET /accounts/login/ HTTP/1.1\r\nHost: {self.server}\r\nConnection: close\r\n\r\n"
+        mysocket = self.create_socket()
+        data = self.send_request(request, mysocket)
+        mysocket.close()
 
         # Find and get the CSRF token
         csrfPos = data.find('csrfmiddlewaretoken')
         csrfVal = data.find('value', csrfPos + 1)
-        csrf = data[csrfVal + 7 : csrfVal + 39]
+        csrf = data[csrfVal + 7: csrfVal + 39]
 
-        login_request = f"POST /accounts/login/ HTTP/1.1\nHost: {self.server}\nConnection: keep-alive\nContent-Length: 109\nCookie: csrftoken={csrf};\r\n\r\nusername={self.username}&password={self.password}&csrfmiddlewaretoken={csrf}&next=%2Ffakebook%2F\r\n"
-        mysocket.send(login_request.encode('ascii'))
-        data = mysocket.recv(1000).decode('ascii')
+        login_request = f"POST /accounts/login/ HTTP/1.1\r\nHost: {self.server}\r\nConnection: close\r\nContent-Length: 109\r\nContent-Type: application/x-www-form-urlencoded\r\nCookie: csrftoken={csrf};\r\n\r\nusername={self.username}&password={self.password}&csrfmiddlewaretoken={csrf}&next=%2Ffakebook%2F"
+        mysocket = self.create_socket()
+        data = self.send_request(login_request, mysocket)
+        mysocket.close()
+
         # Find and get session ID
         SessionPos = data.find("sessionid=")
-        sessionID = data[SessionPos+10:SessionPos+42]
+        sessionID = data[SessionPos + 10:SessionPos + 42]
 
         self.notVisited.append(f"https://{self.server}/fakebook/")
 
-        while len(self.secret_flags) < 6 and self.notVisited:
+        while len(self.secret_flags) < 5 and self.notVisited:
             page = self.notVisited.pop()
             if page not in self.visited:
-                nextPage = f"GET {page} HTTP/1.1\nConnection: keep-alive\nHost:{self.server}\nCookie: csrftoken={csrf};sessionid={sessionID};\r\n\r\n"
-                mysocket.send(nextPage.encode('ascii'))
-                data = mysocket.recv(1000)
-                status = re.findall(r"\D(\d{3})\D", data.decode('ascii'))
+                self.visited.add(page)
+                nextPage = f"GET {page} HTTP/1.1\r\nHost: {self.server}\r\nConnection: close\r\nCookie: csrftoken={csrf};sessionid={sessionID};\r\n\r\n"
+                mysocket = self.create_socket()
+                data = self.send_request(nextPage, mysocket)
+                mysocket.close()
+
+                status = re.findall(r"\D(\d{3})\D", data)
 
                 if status[0] == '200':
-                    #TODO
-                    x
+                    # Handle 200 - OK
+                    flags = re.findall(r"FLAG: (\w{64})", data)
+                    self.secret_flags.extend(flags)
+                    parser = LinkParser()
+                    parser.feed(data)
+                    for link in parser.links:
+                        self.notVisited.append(f"https://{self.server}{link}")
+                    self.visited.add(page)
+
                 elif status[0] == '302':
-                    #TODO
-                    x
-                elif status[0] == '403':
-                    #TODO
-                    x
-                elif status[0] == '404':
-                    #TODO
-                    x
+                    # Handle 302 - Found (Redirect)
+                    location = re.search(r"Location: (.*)\r\n", data)
+                    if location:
+                        new_url = location.group(1)
+                        if new_url.startswith("/"):
+                            new_url = f"https://{self.server}{new_url}"
+                        if new_url.startswith(f"https://{self.server}/fakebook/"):
+                            self.notVisited.append(new_url)
+
+                elif status[0] in ('403', '404'):
+                    # Handle 403 - Forbidden and 404 - Not Found
+                    # Do nothing, just abandon the URL
+                    pass
+
                 elif status[0] == '503':
-                    #TODO
-                    x
-                	
-        if len(self.secret_flags) == 5:
-            for flag in self.secret_flags:
-                print(flag)
+                    # Handle 503 - Service Unavailable
+                    # Re-try the request by adding the URL back to self.notVisited
+                    self.notVisited.append(page)
+
+        # After the while loop, print the found secret flags
+        for flag in self.secret_flags:
+            print(flag)
 
 
 if __name__ == "__main__":
