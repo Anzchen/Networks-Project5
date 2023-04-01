@@ -28,22 +28,9 @@ class Crawler:
         self.port = args.port
         self.username = args.username
         self.password = args.password
-        self.notVisited = []
+        self.notVisited = set()
         self.visited = set()
-        self.secret_flags = []
-
-    def process_chunked_data(self, data):
-        decoded_data = ""
-        while data:
-            chunk_size_end = data.find('\r\n')
-            chunk_size = int(data[:chunk_size_end], 16)
-            if chunk_size == 0:
-                break
-            chunk_data_start = chunk_size_end + 2
-            chunk_data_end = chunk_data_start + chunk_size
-            decoded_data += data[chunk_data_start:chunk_data_end]
-            data = data[chunk_data_end + 2:]
-        return decoded_data
+        self.secret_flags = set()
 
     def create_socket(self):
         mysocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -57,13 +44,20 @@ class Crawler:
     def send_request(self, request, mysocket):
         mysocket.send(request.encode('ascii'))
         data = b""
-        while True:
-            recv_data = mysocket.recv(1000)
-            if not recv_data:
-                break
-            data += recv_data
-            if b'</html>' in recv_data:
-                break
+        try:
+            while True:
+                recv_data = mysocket.recv(1000)
+                if not recv_data:
+                    print("finish receiving data because do not receive any more data")
+                    break
+                data += recv_data
+                if b'</html>' in recv_data or b'Location' in recv_data:
+                    print("finish receiving data because reach the end :")
+                    break
+        except socket.timeout:
+            print("Socket timeout reached, return current data:")
+            print(data.decode('ascii'))
+            return data.decode('ascii')
         return data.decode('ascii')
 
     def run(self):
@@ -86,9 +80,12 @@ class Crawler:
         SessionPos = data.find("sessionid=")
         sessionID = data[SessionPos + 10:SessionPos + 42]
 
-        self.notVisited.append(f"https://{self.server}/fakebook/")
+        self.notVisited.add(f"https://{self.server}/fakebook/")
 
-        while len(self.secret_flags) < 5 and self.notVisited:
+        while len(self.secret_flags) < 5 and len(self.notVisited) > 0:
+            print("flags = " + str(self.secret_flags))
+            print("visited = " + str(len(self.visited)))
+            print("notVisited = " + str(len(self.notVisited)))
             page = self.notVisited.pop()
             if page not in self.visited:
                 self.visited.add(page)
@@ -102,11 +99,15 @@ class Crawler:
                 if status[0] == '200':
                     # Handle 200 - OK
                     flags = re.findall(r"FLAG: (\w{64})", data)
-                    self.secret_flags.extend(flags)
+                    for flag in flags:
+                        self.secret_flags.add(flag)
                     parser = LinkParser()
                     parser.feed(data)
-                    for link in parser.links:
-                        self.notVisited.append(f"https://{self.server}{link}")
+                    new_links = [f"https://{self.server}{link}" for link in parser.links if
+                                 f"https://{self.server}{link}" not in self.visited
+                                 and f"https://{self.server}{link}" not in self.notVisited]
+                    for link in new_links:
+                        self.notVisited.add(link)
                     self.visited.add(page)
 
                 elif status[0] == '302':
@@ -117,7 +118,7 @@ class Crawler:
                         if new_url.startswith("/"):
                             new_url = f"https://{self.server}{new_url}"
                         if new_url.startswith(f"https://{self.server}/fakebook/"):
-                            self.notVisited.append(new_url)
+                            self.notVisited.add(new_url)
 
                 elif status[0] in ('403', '404'):
                     # Handle 403 - Forbidden and 404 - Not Found
@@ -127,7 +128,9 @@ class Crawler:
                 elif status[0] == '503':
                     # Handle 503 - Service Unavailable
                     # Re-try the request by adding the URL back to self.notVisited
-                    self.notVisited.append(page)
+                    self.notVisited.add(page)
+
+        print("no more pages waiting for visiting")
 
         # After the while loop, print the found secret flags
         for flag in self.secret_flags:
