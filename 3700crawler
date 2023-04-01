@@ -99,11 +99,13 @@ class Crawler:
 
                 # Find and get session ID
                 SessionPos = data.find("sessionid=")
-                sessionID = data[SessionPos + 10:SessionPos + 42]
+                if SessionPos != -1:
+                    sessionID = data[SessionPos + 10:SessionPos + 42]
 
                 # refresh and get the CSRF token
                 csrfPos = data.find('csrftoken=')
-                csrf = data[csrfPos + 10: csrfPos + 74]
+                if csrfPos != -1:
+                    csrf = data[csrfPos + 10: csrfPos + 74]
 
                 status = re.findall(r"\D(\d{3})\D", data)
 
