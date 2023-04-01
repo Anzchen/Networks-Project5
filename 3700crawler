@@ -28,7 +28,7 @@ class Crawler:
         self.port = args.port
         self.username = args.username
         self.password = args.password
-        self.notVisited = set()
+        self.notVisited = []
         self.visited = set()
         self.secret_flags = set()
 
@@ -48,11 +48,9 @@ class Crawler:
             while True:
                 recv_data = mysocket.recv(1000)
                 if not recv_data:
-                    print("finish receiving data because do not receive any more data")
                     break
                 data += recv_data
                 if b'</html>' in recv_data or b'Location' in recv_data:
-                    print("finish receiving data because reach the end :")
                     break
         except socket.timeout:
             print("Socket timeout reached, return current data:")
@@ -80,12 +78,9 @@ class Crawler:
         SessionPos = data.find("sessionid=")
         sessionID = data[SessionPos + 10:SessionPos + 42]
 
-        self.notVisited.add(f"https://{self.server}/fakebook/")
+        self.notVisited.append(f"https://{self.server}/fakebook/")
 
         while len(self.secret_flags) < 5 and len(self.notVisited) > 0:
-            print("flags = " + str(self.secret_flags))
-            print("visited = " + str(len(self.visited)))
-            print("notVisited = " + str(len(self.notVisited)))
             page = self.notVisited.pop()
             if page not in self.visited:
                 self.visited.add(page)
@@ -107,7 +102,7 @@ class Crawler:
                                  f"https://{self.server}{link}" not in self.visited
                                  and f"https://{self.server}{link}" not in self.notVisited]
                     for link in new_links:
-                        self.notVisited.add(link)
+                        self.notVisited.append(link)
                     self.visited.add(page)
 
                 elif status[0] == '302':
@@ -118,7 +113,7 @@ class Crawler:
                         if new_url.startswith("/"):
                             new_url = f"https://{self.server}{new_url}"
                         if new_url.startswith(f"https://{self.server}/fakebook/"):
-                            self.notVisited.add(new_url)
+                            self.notVisited.append(new_url)
 
                 elif status[0] in ('403', '404'):
                     # Handle 403 - Forbidden and 404 - Not Found
@@ -128,9 +123,7 @@ class Crawler:
                 elif status[0] == '503':
                     # Handle 503 - Service Unavailable
                     # Re-try the request by adding the URL back to self.notVisited
-                    self.notVisited.add(page)
-
-        print("no more pages waiting for visiting")
+                    self.notVisited.append(page)
 
         # After the while loop, print the found secret flags
         for flag in self.secret_flags:
