@@ -41,27 +41,42 @@ class Crawler:
         mysocket = ssl_context.wrap_socket(mysocket, server_hostname=self.server)
         return mysocket
 
-    def send_request(self, request, mysocket):
-        mysocket.send(request.encode('ascii'))
-        data = b""
-        try:
-            while True:
-                recv_data = mysocket.recv(1000)
-                if not recv_data:
-                    break
-                data += recv_data
-                if b'</html>' in recv_data or b'Location' in recv_data:
-                    break
-        except socket.timeout:
-            print("Socket timeout reached, return current data:")
-            return data.decode('ascii')
+    # send all request in series to the server
+    def send_pipeline_requests(self, sock, requests):
+        for request in requests:
+            sock.sendall(request.encode('ascii'))
 
-        return data.decode('ascii')
+    # function that make receive the data as a pipeline
+    def receive_pipeline_responses(self, sock, num_responses):
+        responses = []
+        buffer = b""
+        while num_responses > 0:
+            while True:
+                data = sock.recv(4096)
+                if not data:
+                    break
+                buffer += data
+
+            # find the break point of the response
+            while b'\r\n\r\n' in buffer:
+                # split at this point and return the rest to the buffer
+                response, buffer = buffer.split(b'\r\n\r\n', 1)
+
+                # if there is html end tag, meaning this part is continued with the previous header
+                if b'</html>' in buffer:
+                    response_continue, buffer = buffer.split(b'</html>', 1)
+                    response += response_continue
+                responses.append(response.decode('ascii'))
+
+                # minus 1 for checking out whether receive all response, end at 0
+                num_responses -= 1
+        return responses
 
     def run(self):
         request = f"GET /accounts/login/ HTTP/1.1\r\nHost: {self.server}\r\nConnection: close\r\n\r\n"
         mysocket = self.create_socket()
-        data = self.send_request(request, mysocket)
+        self.send_pipeline_requests(mysocket, [request])
+        data = self.receive_pipeline_responses(mysocket, 1)[0]
         mysocket.close()
 
         # Find and get the CSRF token
@@ -75,7 +90,8 @@ class Crawler:
         login_request = f"POST /accounts/login/ HTTP/1.1\r\nHost: {self.server}\r\nConnection: close\r\nContent-Length: {content_length}\r\nContent-Type: application/x-www-form-urlencoded\r\nCookie: csrftoken={csrf};\r\n\r\n{request_body} "
 
         mysocket = self.create_socket()
-        data = self.send_request(login_request, mysocket)
+        self.send_pipeline_requests(mysocket, [login_request])
+        data = self.receive_pipeline_responses(mysocket, 1)[0]
         mysocket.close()
 
         # Find and get session ID
@@ -88,44 +104,60 @@ class Crawler:
 
         self.notVisited.append(f"https://{self.server}/fakebook/")
 
+        # loop for visiting new pages
         while len(self.secret_flags) < 5 and len(self.notVisited) > 0:
-            page = self.notVisited.pop()
-            if page not in self.visited:
-                self.visited.add(page)
-                nextPage = f"GET {page} HTTP/1.1\r\nHost: {self.server}\r\nConnection: close\r\nCookie: csrftoken={csrf};sessionid={sessionID};\r\n\r\n"
-                mysocket = self.create_socket()
-                data = self.send_request(nextPage, mysocket)
-                mysocket.close()
+            requests = []
 
-                # Find and get session ID
-                SessionPos = data.find("sessionid=")
+            # pull out the resquest from the notVisited list
+            while len(requests) < 10 and len(self.notVisited) > 0:
+                page = self.notVisited.pop()
+                # already visited then jump over this one
+                if page in self.visited:
+                    continue
+                self.visited.add(page)
+                # check if it is last request of the series of request, in order to close the server
+                if len(requests) == 9 or len(self.notVisited) == 0:
+                    # it is the last one of the queue, then make a close server request
+                    nextPage = f"GET {page} HTTP/1.1\r\nHost: {self.server}\r\nConnection: close\r\nCookie: csrftoken={csrf};sessionid={sessionID};\r\n\r\n"
+                else:
+                    # it is not the last one of the queue, then make a keep-alive server request
+                    nextPage = f"GET {page} HTTP/1.1\r\nHost: {self.server}\r\nConnection: keep-alive\r\nCookie: csrftoken={csrf};sessionid={sessionID};\r\n\r\n"
+                requests.append(nextPage)
+
+            mysocket = self.create_socket()
+            self.send_pipeline_requests(mysocket, requests)
+            responses = self.receive_pipeline_responses(mysocket, len(requests))
+            mysocket.close()
+
+            for res in responses:
+                # refresh and get session ID
+                SessionPos = res.find("sessionid=")
                 if SessionPos != -1:
-                    sessionID = data[SessionPos + 10:SessionPos + 42]
+                    sessionID = res[SessionPos + 10:SessionPos + 42]
 
                 # refresh and get the CSRF token
-                csrfPos = data.find('csrftoken=')
+                csrfPos = res.find('csrftoken=')
                 if csrfPos != -1:
                     csrf = data[csrfPos + 10: csrfPos + 74]
 
-                status = re.findall(r"\D(\d{3})\D", data)
+                status = re.findall(r"\D(\d{3})\D", res)
 
                 if status[0] == '200':
                     # Handle 200 - OK
-                    flags = re.findall(r"FLAG: (\w{64})", data)
+                    flags = re.findall(r"FLAG: (\w{64})", res)
                     for flag in flags:
                         self.secret_flags.add(flag)
                     parser = LinkParser()
-                    parser.feed(data)
+                    parser.feed(res)
                     new_links = [f"https://{self.server}{link}" for link in parser.links if
                                  f"https://{self.server}{link}" not in self.visited
                                  and f"https://{self.server}{link}" not in self.notVisited]
                     for link in new_links:
                         self.notVisited.append(link)
-                    self.visited.add(page)
 
                 elif status[0] == '302':
                     # Handle 302 - Found (Redirect)
-                    location = re.search(r"Location: (.*)\r\n", data)
+                    location = re.search(r"Location: (.*)\r\n", res)
                     if location:
                         new_url = location.group(1)
                         if new_url.startswith("/"):
@@ -140,8 +172,8 @@ class Crawler:
 
                 elif status[0] == '503':
                     # Handle 503 - Service Unavailable
-                    # Re-try the request by adding the URL back to self.notVisited
-                    self.notVisited.append(page)
+                    # it is not going to happen
+                    pass
 
         # After the while loop, print the found secret flags
         for flag in self.secret_flags:

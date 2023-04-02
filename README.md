@@ -2,15 +2,14 @@
 
 This is the fifth project for Networks & Distributed Systems course. 
 
-The assignment description is below:
-This assignment is intended to familiarize you with the HTTP protocol. HTTP is (arguably) the most important application level protocol on the Internet today: the Web runs on HTTP, and increasingly other applications use HTTP as well (including Bittorrent, streaming video, Facebook and Twitter’s social APIs, etc.).
+This project is intended to familiarize you with the HTTP protocol. HTTP is (arguably) the most important application level protocol on the Internet today: the Web runs on HTTP, and increasingly other applications use HTTP as well (including Bittorrent, streaming video, Facebook and Twitter’s social APIs, etc.).
 
-Your goal in this assignment is to implement a web crawler that gathers data from a fake social networking website that we have set up for you. There are several educational goals of this project:
+Our goal in this assignment is to implement a web crawler that gathers data from a fake social networking website that we have set up. There are several educational goals of this project:
 
-- To expose you to the HTTP protocol, which underlies a large (and growing) number of applications and services today.
-- To let you see how web pages are structured using HTML.
-- To give you experience implementing a client for a well-specified network protocol.
-- To have you understand how web crawlers work, and how they are used to implement popular web services today.
+- To expose to the HTTP protocol, which underlies a large (and growing) number of applications and services today.
+- To see how web pages are structured using HTML.
+- To experience implementing a client for a well-specified network protocol.
+- To understand how web crawlers work, and how they are used to implement popular web services today.
 
 ## High-Level Approach
 
